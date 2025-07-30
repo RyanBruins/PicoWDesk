@@ -25,6 +25,7 @@ PicoWDesk/
 ├── LICENCE.md             # MIT licence
 ├── docs/
 │   ├── DESKTOP.md         # Desktop & Mobile modes, folders, icons
+│   ├── NETWORK.md         # Network Configuration Guide for Pico W
 │   ├── API.md             # Full HTTP API reference
 │   └── INSTALL.md         # Step-by-step flashing & install guide
 └── apps/
