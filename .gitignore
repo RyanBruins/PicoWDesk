@@ -1,0 +1,26 @@
+# PicoWDesk – MicroPython Web Desktop
+# Git ignore rules for the source repo
+
+# Build / deploy artefacts
+/deploy/
+/tmp/
+
+# Python byte-code
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS / Editor droppings
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.log
+
+# MicroPython device mount points (common on macOS/Linux)
+/mnt/
+/media/*/RPI-RP2

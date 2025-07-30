@@ -1,0 +1,123 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="window-defaults" content='{"top":120,"left":120,"width":800,"height":600}'>
+<title>Image Viewer</title>
+<style>
+  body{margin:0;font-family:-apple-system;background:#111;display:flex;flex-direction:column;height:100vh;color:#eee}
+  /* bar – vertically center everything */
+  #bar{background:#222;padding:6px;display:flex;gap:10px;align-items:center}
+  button{padding:4px 8px}
+  #fname{line-height:1}   /* keeps it on the same line-height as the button */
+
+  #imageArea{flex:1;display:flex;justify-content:center;align-items:center}
+  #imageArea img{max-width:95%;max-height:95%;object-fit:contain}
+  #msg{display:none;font-size:1.5em}
+
+  /* open-dialog styling */
+  #openDlg{
+    position:fixed;inset:0;
+    background:rgba(0,0,0,.75);
+    display:flex;justify-content:center;align-items:center;
+    z-index:1000
+  }
+  #openDlg.hidden{display:none}
+  #openBox{
+    background:#2a2a2a;border-radius:6px;
+    padding:15px 20px;max-width:90vw;max-height:80vh;overflow:auto
+  }
+  #openBox ul{margin:0;padding:0;list-style:none}
+  #openBox li{padding:4px 0}
+  #openBox a{color:#4af;text-decoration:none}
+  #openBox a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div id="bar">
+  <button onclick="openImage()">Open</button>
+  <span id="fname"></span>
+</div>
+
+<div id="imageArea">
+  <img id="pic" style="display:none" />
+  <div id="msg"></div>
+</div>
+
+<!-- open-dialog overlay -->
+<div id="openDlg" class="hidden">
+  <div id="openBox">
+    <ul id="fileList"></ul>
+  </div>
+</div>
+
+<script>
+const pic   = document.getElementById('pic');
+const fname = document.getElementById('fname');
+const msg   = document.getElementById('msg');
+const openDlg  = document.getElementById('openDlg');
+const fileList = document.getElementById('fileList');
+
+const validExts = ['png','jpg','jpeg','gif','ico'];
+
+/* ---- startup --------------------------------------------------------- */
+window.onload = () => {
+  const url = new URLSearchParams(location.search);
+  if(url.has('file')) loadImage(url.get('file'));
+};
+
+/* ---- open dialog ------------------------------------------------------ */
+async function openImage(){
+  const list = await fetch('/api/list').then(r=>r.json());
+  const choices = list
+    .map(f=>f.name)
+    .sort((a, b) => a.localeCompare(b))
+    .filter(n=>{
+      const ext = n.split('.').pop().toLowerCase();
+      return validExts.includes(ext);
+    });
+  fileList.innerHTML = '';
+  choices.forEach(name=>{
+    const li = document.createElement('li');
+    const a  = document.createElement('a');
+    a.href = '#';
+    a.textContent = name;
+    a.onclick = (e)=>{
+      e.preventDefault();
+      closeDlg();
+      loadImage(name);
+    };
+    li.appendChild(a);
+    fileList.appendChild(li);
+  });
+  openDlg.classList.remove('hidden');
+}
+function closeDlg(){
+  openDlg.classList.add('hidden');
+}
+/* click outside the list to close */
+openDlg.addEventListener('click',e=>{
+  if(e.target === openDlg) closeDlg();
+});
+
+/* ---- load & display --------------------------------------------------- */
+async function loadImage(name){
+  fname.textContent = '';
+  pic.style.display = 'none';
+  msg.style.display = 'none';
+
+  try{
+    const resp = await fetch('/'+encodeURIComponent(name));
+    if(!resp.ok) throw Error('Not found');
+    const blob = await resp.blob();
+    pic.src    = URL.createObjectURL(blob);
+    pic.style.display = 'inline';
+    fname.textContent = name;
+  }catch(e){
+    msg.textContent = 'Image not found: '+name;
+    msg.style.display = 'block';
+  }
+}
+</script>
+</body>
+</html>

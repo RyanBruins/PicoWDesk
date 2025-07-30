@@ -1,0 +1,395 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="window-defaults" content='{"top":150,"left":150,"width":640,"height":500}'>
+<title>File Manager</title>
+<style>
+body{margin:0;font-family:-apple-system;background:#f7f7f7}
+#toolbar{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:6px 12px;background:#fff;border-bottom:1px solid #ccc;font-size:14px
+}
+#toolbar button:disabled{opacity:.4;cursor:not-allowed}
+#toolbar select{margin-left:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:15px;padding:20px}
+.item{text-align:center;cursor:pointer}
+.item img{width:48px;height:48px}
+.name{margin-top:4px;font-size:12px}
+.restricted{color:red}
+.context{position:fixed;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.25);border-radius:6px;padding:5px 0;z-index:999}
+.context div{padding:6px 12px;cursor:pointer}
+.context .disabled{color:#aaa;cursor:not-allowed}
+
+#uploadBtn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: monospace;   /* keeps all chars the same width */
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* center middle section */
+#toolbar > div:first-child{
+  display:flex;align-items:center;gap:8px;
+}
+#toolbar > div:last-child{
+  display:flex;align-items:center;
+}
+#uploadInput{display:none;}
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <div>
+    <button id="refreshBtn" title="Refresh" onclick="refresh()"><b>↻</b></button>
+    <button id="backBtn" title="Back" onclick="goBack()" disabled><b>←</b></button>
+    <span id="folderLabel">/</span>
+  </div>
+  <div>
+    <span id="freeSpace">Free Space: -- kB</span>
+    &nbsp;&nbsp;&nbsp;<button id="uploadBtn" title="Upload" onclick="uploadFile()"><b>↑</b></button>&nbsp;&nbsp;&nbsp;
+    <label>Sort:
+      <select id="sortSel">
+        <option value="nameAsc">By Name, Ascending</option>
+        <option value="nameDesc">By Name, Descending</option>
+        <option value="dateAsc">By Date, Ascending</option>
+        <option value="dateDesc">By Date, Descending</option>
+        <option value="type">By File Type</option>
+      </select>
+    </label>
+  </div>
+</div>
+<div class="grid" id="grid"></div>
+<input type="file" id="uploadInput">
+
+<script>
+let allFiles=[], currentFolder=null;
+let activeContext=null;
+const COOKIE_FOLDER="fmFolder", COOKIE_SORT="fmSort";
+const RESTRICTED=new Set(["main.py","config.json","index.html"]);
+
+function getCookie(k,def=""){return (document.cookie.match('(^|;)\\s*'+k+'=([^;]*)')||[])[2]||def;}
+function setCookie(k,v){document.cookie=k+"="+v+"; path=/";}
+
+function parseFolder(fname){
+  if(!fname.startsWith("_")) return null;
+  const parts=fname.split("_");
+  if(parts.length<3) return null;
+  return {folder:parts[1], name:parts.slice(2).join("_"), file:fname};
+}
+
+function closeActiveContext(){
+  if(activeContext){activeContext.remove();activeContext=null;}
+}
+
+/* ---------- refresh & free-space ---------- */
+async function updateFreeSpace(){
+  const info=await fetch("/api/info").then(r=>r.json());
+  document.getElementById("freeSpace").textContent=
+    `Free Space: ${Math.round(info.fs_free/1024)} kB`;
+}
+async function refresh(){
+  allFiles=await fetch("/api/list").then(r=>r.json());
+  updateFreeSpace();
+  render();
+}
+/* ---------- upload ---------- */
+async function uploadFile() {
+    const input = document.getElementById('uploadInput');
+    input.onchange = async () => {
+        const file = input.files[0];
+        if (!file) return;
+
+        const info = await fetch('/api/info').then(r => r.json());
+        if (file.size > info.fs_free) { alert('Insufficient Space'); return; }
+        if (RESTRICTED.has(file.name)) { alert('Restricted file'); return; }
+        const exists = allFiles.some(f => f.name === file.name);
+        if (exists && !confirm('Overwrite?')) return;
+
+        const CHUNK = 4096;
+        const token = Date.now().toString();
+        let offset = 0;
+
+        // Spinner characters
+        const spinnerChars = ['\\', '|', '/', '-'];
+        let spinnerIndex = 0;
+
+        // Function to update the spinner
+        function updateSpinner() {
+            const uploadBtn = document.getElementById('uploadBtn');
+            uploadBtn.textContent = spinnerChars[spinnerIndex];
+            spinnerIndex = (spinnerIndex + 1) % spinnerChars.length;
+        }
+
+        // Start spinner animation
+        const spinnerInterval = setInterval(updateSpinner, 200);
+
+        try {
+            while (offset < file.size) {
+                const slice = file.slice(offset, offset + CHUNK);
+                const buf = await slice.arrayBuffer();
+                const isLast = offset + buf.byteLength >= file.size;
+
+                const url = '/api/upload/' + encodeURIComponent(file.name) +
+                            '?offset=' + offset +
+                            '&token=' + token +
+                            (isLast ? '&done=1' : '');
+
+                let attempt = 0;
+                while (attempt < 5) {
+                    try {
+                        const r = await fetch(url, { method: 'POST', body: buf });
+                        if (r.ok) break;
+                        throw new Error(await r.text());
+                    } catch (e) {
+                        attempt++;
+                        console.warn(`Chunk ${offset} failed, retry ${attempt}`, e);
+                        await new Promise(r => setTimeout(r, 200));
+                    }
+                }
+                if (attempt === 5) {
+                    // abort – close handle on server
+                    await fetch('/api/upload/' + encodeURIComponent(file.name) +
+                                '?token=' + token + '&done=1', { method: 'POST', body: '' });
+                    alert('Upload failed at offset ' + offset);
+                    clearInterval(spinnerInterval);
+                    document.getElementById('uploadBtn').innerHTML = '↑';
+                    return;
+                }
+
+                offset += buf.byteLength;
+            }
+
+            // Upload complete
+            clearInterval(spinnerInterval);
+            document.getElementById('uploadBtn').innerHTML = '↑';
+            refresh();
+        } catch (e) {
+            console.error('Upload error:', e);
+            clearInterval(spinnerInterval);
+            document.getElementById('uploadBtn').innerHTML = '↑';
+            alert('Upload failed');
+        }
+    };
+    input.click();
+}
+
+/* ---------- render grid ---------- */
+function render(){
+  const folder=getCookie(COOKIE_FOLDER,"");
+  const sortBy=getCookie(COOKIE_SORT,"nameAsc");
+  document.getElementById("sortSel").value=sortBy;
+  document.getElementById("folderLabel").textContent=folder||"/";
+  document.getElementById("backBtn").disabled=!folder;
+
+  let display=[];
+  if(folder){
+    display=allFiles.filter(f=>f.name.startsWith(`_${folder}_`));
+  }else{
+    const folders=new Set();
+    allFiles.forEach(f=>{
+      const p=parseFolder(f.name);
+      if(p) folders.add(p.folder);
+    });
+    display=[...folders,...allFiles.filter(f=>!parseFolder(f.name)&&f.name!=="index.html")];
+  }
+
+  display.sort((a,b)=>{
+    const fA=typeof a==="string",fB=typeof b==="string";
+    if(fA&&!fB) return -1;
+    if(!fA&&fB) return 1;
+    switch(sortBy){
+      case "nameAsc":{
+        const ka=typeof a==="string"?a:a.name;
+        const kb=typeof b==="string"?b:b.name;
+        return ka.localeCompare(kb);
+      }
+      case "nameDesc":{
+        const ka=typeof a==="string"?a:a.name;
+        const kb=typeof b==="string"?b:b.name;
+        return kb.localeCompare(ka);
+      }
+      case "dateAsc": return a.size-b.size;
+      case "dateDesc": return b.size-a.size;
+      case "type":{
+        const ea=(typeof a==="string"?a:a.name).split('.').pop()||"";
+        const eb=(typeof b==="string"?b:b.name).split('.').pop()||"";
+        return ea.localeCompare(eb)||(typeof a==="string"?a:a.name).localeCompare(typeof b==="string"?b:b.name);
+      }
+      default: return 0;
+    }
+  });
+
+  const g=document.getElementById("grid");
+  g.innerHTML="";
+  display.forEach(item=>{
+    if(typeof item==="string") g.appendChild(makeItem(item,true,{}));
+    else g.appendChild(makeItem(item.name,false,item));
+  });
+}
+
+/* ---------- label & icon helpers ---------- */
+function cleanAppName(raw){
+  if(raw.endsWith(".html")){
+    const p=parseFolder(raw);
+    return p ? p.name.replace(".html","") : raw.replace(".html","");
+  }
+  return raw;
+}
+function makeItem(name,isFolder,data){
+  const d=document.createElement("div");
+  d.className="item";
+  const img=document.createElement("img");
+  const ext=name.split('.').pop().toLowerCase();
+  let displayName=name;
+  let imgSrc="";
+
+  if(isFolder){
+    displayName="/"+name;
+    imgSrc=name+".ico";
+    img.onerror=()=>img.src="folder.ico";
+  }
+  else if(name.endsWith(".html")){
+    displayName=cleanAppName(name);
+    imgSrc=cleanAppName(name)+".ico";
+    img.onerror=()=>img.src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>";
+  }
+  else if(ext==="ico"){
+    displayName=name;
+    imgSrc=name;
+  }
+  else if(["jpg","jpeg","png","gif","bmp","svg"].includes(ext)){
+    displayName=name;
+    imgSrc="Viewer.ico";
+    img.onerror=()=>img.src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖼️</text></svg>";
+  }
+  else{
+    displayName=name;
+    imgSrc="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📝</text></svg>";
+  }
+
+  img.src=imgSrc;
+  const n=document.createElement("div");
+  n.textContent=displayName;
+  n.className="name"+(data.restricted?" restricted":"");
+  d.appendChild(img);d.appendChild(n);
+
+  /* helpers */
+  function openFolderOrFile(){
+    if(isFolder) openFolder(name);
+    else if(!data.restricted) openFile(data);
+  }
+  function showContextMenu(ev){
+    ev.preventDefault();closeActiveContext();
+    const ctx=document.createElement("div");ctx.className="context";activeContext=ctx;
+    if(isFolder){
+      const open=document.createElement("div");
+      open.textContent="Open";open.onclick=()=>{closeActiveContext();openFolder(name);};
+      ctx.appendChild(open);
+    }else{
+      if(data.restricted){
+        const item=document.createElement("div");
+        item.textContent="Restricted File";item.className="disabled";
+        ctx.appendChild(item);
+      }else{
+        const run=document.createElement("div");
+        run.textContent="Run";
+        if(!name.endsWith(".html")) run.className="disabled";
+        else run.onclick=()=>{closeActiveContext();openFile(data);};
+
+        const viewEdit=document.createElement("div");
+        const isImg=["ico","jpg","jpeg","png","gif","bmp","svg"].includes(ext);
+        viewEdit.textContent=isImg?"View":"Edit";
+        viewEdit.onclick=()=>{
+          closeActiveContext();
+          const app=isImg?"/Viewer.html":"/Editor.html";
+          parent.launch(app+"?file="+encodeURIComponent(name));
+        };
+        const down=document.createElement("div");
+        down.textContent="Download";
+        down.onclick=()=>{
+          closeActiveContext();
+          const a=document.createElement("a");
+          a.href="/api/download/"+encodeURIComponent(name);
+          a.download=name;
+          a.style.display="none";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        };
+        ctx.appendChild(down);
+        const ren=document.createElement("div");ren.textContent="Rename";
+        ren.onclick=()=>{closeActiveContext();renameFile(data);};
+        const del=document.createElement("div");del.textContent="Delete";
+        del.onclick=()=>{closeActiveContext();deleteFile(data);};
+        const items=[run, viewEdit, down, ren, del]; //set context menu order
+        items.forEach(x=>ctx.appendChild(x));
+      }
+    }
+    document.body.appendChild(ctx);
+    ev.stopPropagation();
+    const rect=ctx.getBoundingClientRect();
+    let left=ev.clientX??ev.changedTouches[0].clientX;
+    let top=ev.clientY??ev.changedTouches[0].clientY;
+    if(left+rect.width>window.innerWidth) left=window.innerWidth-rect.width-5;
+    if(top+rect.height>window.innerHeight) top=window.innerHeight-rect.height-5;
+    if(left<5) left=5;
+    if(top<5) top=5;
+    ctx.style.left=left+"px";ctx.style.top=top+"px";
+  }
+  if(isFolder){
+    d.onclick=openFolderOrFile;
+    d.ondblclick=openFolderOrFile;
+    d.oncontextmenu=showContextMenu;
+    d.addEventListener("touchend",ev=>{ev.preventDefault();openFolder(name);});
+  }else{
+    d.onclick=showContextMenu;
+    d.oncontextmenu=showContextMenu;
+    d.addEventListener("touchend",ev=>{ev.preventDefault();showContextMenu(ev);});
+    d.ondblclick=()=>{if(!data.restricted)openFile(data);};
+  }
+  return d;
+}
+
+document.addEventListener("click",e=>{if(!e.target.closest(".context"))setTimeout(closeActiveContext,0);});
+document.addEventListener("contextmenu",e=>{if(!e.target.closest(".context"))setTimeout(closeActiveContext,0);});
+
+function openFolder(name){setCookie(COOKIE_FOLDER,name);render();}
+function goBack(){setCookie(COOKIE_FOLDER,"");render();}
+function openFile(f){
+  if(f.name==="main.py")return alert("main.py is restricted");
+  if(f.name.endsWith(".html"))parent.launch(f.name);
+  else parent.launch("Editor.html?file="+encodeURIComponent(f.name));
+}
+function renameFile(f){
+  const n=prompt("New name:",f.name);
+  if(!n||n===f.name)return;
+  fetch("/api/read/"+f.name).then(r=>r.text()).then(content=>{
+    fetch("/api/write/"+n,{method:"POST",body:content}).then(()=>{
+      fetch("/api/delete/"+f.name,{method:"POST"}).then(()=>{
+        allFiles=allFiles.map(x=>x.name===f.name?{...x,name:n}:x);render();
+      });
+    });
+  });
+}
+function deleteFile(f){
+  if(!confirm("Delete "+f.name+"?"))return;
+  fetch("/api/delete/"+f.name,{method:"POST"}).then(()=>{
+    allFiles=allFiles.filter(x=>x.name!==f.name);render();
+  });
+}
+
+document.getElementById("sortSel").addEventListener("change",e=>{
+  setCookie(COOKIE_SORT,e.target.value);render();
+});
+
+refresh();
+</script>
+</body>
+</html>

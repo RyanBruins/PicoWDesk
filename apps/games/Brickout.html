@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="window-defaults" content='{"top":100,"left":150,"width":700,"height":650}'>
+    <!-- desktop keeps the original fixed-size canvas -->
+    <meta id="viewport-meta" name="viewport">
+    <title>BRICKOUT</title>
+    <style>
+        /* ---------- DESKTOP (unchanged) ---------- */
+        body{
+            margin:0;
+            padding:0;
+            background:#000;
+            color:#0ff;
+            font-family:'Courier New',monospace;
+            text-align:center;
+            overflow:hidden;
+        }
+        #game-container{
+            position:relative;
+            width:640px;
+            margin:0 auto;
+        }
+        #title{
+            font-size:32px;
+            letter-spacing:4px;
+            margin:10px 0;
+            text-shadow:3px 3px 0 #f0f;
+        }
+        #scoreboard{
+            display:flex;
+            justify-content:space-between;
+            font-size:16px;
+            margin-bottom:10px;
+        }
+        #game-canvas{
+            border:2px solid #0ff;
+            background:#000;
+            display:block;
+            margin:0 auto;
+        }
+        #game-over{
+            position:absolute;
+            top:50%;left:50%;
+            transform:translate(-50%,-50%);
+            background:#000;
+            border:2px solid #0ff;
+            padding:20px;
+            text-align:center;
+            display:none;
+        }
+        button{
+            background:#000;
+            color:#0ff;
+            border:1px solid #0ff;
+            padding:10px 20px;
+            font-family:'Courier New',monospace;
+            font-size:16px;
+            cursor:pointer;
+            margin-top:10px;
+        }
+        button:hover{background:#0ff;color:#000;}
+
+        /* ---------- MOBILE ---------- */
+        @media (max-width:700px){
+            #viewport-meta{content:"width=device-width, initial-scale=1.0, user-scalable=no";}
+            #game-container{width:100vw;}
+            #title{font-size:5vw;margin:2vw 0;}
+            #scoreboard{font-size:3vw;margin:0 2vw 2vw;}
+            #game-canvas{
+                width:100vw;
+                height:75vw;   /* 4:3 */
+                border:none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="title">BRICKOUT</div>
+        <div id="scoreboard">
+            <div>LEVEL: <span id="level">1</span></div>
+            <div>SCORE: <span id="score">0</span></div>
+            <div>BALLS: <span id="balls">3</span></div>
+        </div>
+        <canvas id="game-canvas" width="640" height="480"></canvas>
+        <div id="game-over">
+            <div id="game-over-message"></div>
+            <div id="final-score"></div>
+            <button onclick="restartGame()">PLAY AGAIN</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas   = document.getElementById('game-canvas');
+        const ctx      = canvas.getContext('2d');
+        const levelEl  = document.getElementById('level');
+        const scoreEl  = document.getElementById('score');
+        const ballsEl  = document.getElementById('balls');
+        const gameOverDiv  = document.getElementById('game-over');
+        const gameOverMsg  = document.getElementById('game-over-message');
+        const finalScoreEl = document.getElementById('final-score');
+
+        /* ---------- CONFIG ---------- */
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+        if(isMobile){
+            canvas.width  = window.innerWidth;
+            canvas.height = window.innerWidth*3/4;
+        }
+
+        /* ---------- GAME STATE ---------- */
+        let score   = 0;
+        let level   = 1;
+        let ballsLeft = 3;
+        let bricks  = [];
+        let ball    = {x:canvas.width/2,y:canvas.height-80,dx:0,dy:0,radius:8,speed:4};
+        let paddle  = {x:canvas.width/2-40,y:canvas.height-30,width:80,height:10,dx:0,speed:8};
+        let leftPressed=false,rightPressed=false,gameStarted=false,gameOver=false;
+        const brickColors = ['#ff0000','#ff8000','#ffff00','#00ff00','#0080ff','#ff00ff'];
+
+        /* ---------- AUDIO ---------- */
+        const audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+        function beep(f,d,t='square'){
+            const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+            o.type=t;o.frequency.value=f;o.connect(g);g.connect(audioCtx.destination);
+            g.gain.setValueAtTime(.3,audioCtx.currentTime);
+            g.gain.exponentialRampToValueAtTime(.01,audioCtx.currentTime+d);
+            o.start();o.stop(audioCtx.currentTime+d);
+        }
+
+        /* ---------- BRICKS ---------- */
+        function makeBricks(){
+            bricks=[];
+            const ROWS=6,COLS=10,BW=isMobile?canvas.width/10:64,BH=20;
+            for(let r=0;r<ROWS;r++){
+                for(let c=0;c<COLS;c++){
+                    bricks.push({x:c*BW,y:r*BH,width:BW,height:BH,color:brickColors[r],destroyed:false});
+                }
+            }
+        }
+
+        /* ---------- RESET ---------- */
+        function resetBall(){
+            ball.x=canvas.width/2;
+            ball.y=canvas.height-80;
+            const dir=Math.random()>.5?1:-1;
+            ball.dx=dir*ball.speed;
+            ball.dy=-ball.speed;
+            gameStarted=false;
+        }
+
+        /* ---------- HUD ---------- */
+        function updateHUD(){
+            levelEl.textContent=level;
+            scoreEl.textContent=score;
+            ballsEl.textContent=ballsLeft;
+        }
+
+        /* ---------- DRAW ---------- */
+        function draw(){
+            ctx.fillStyle='#000';ctx.fillRect(0,0,canvas.width,canvas.height);
+            bricks.forEach(b=>{
+                if(!b.destroyed){
+                    ctx.fillStyle=b.color;
+                    ctx.fillRect(b.x,b.y,b.width,b.height);
+                    ctx.strokeStyle='#000';ctx.strokeRect(b.x,b.y,b.width,b.height);
+                }
+            });
+            ctx.fillStyle='#0ff';
+            ctx.fillRect(paddle.x,paddle.y,paddle.width,paddle.height);
+            ctx.beginPath();
+            ctx.arc(ball.x,ball.y,ball.radius,0,Math.PI*2);
+            ctx.fillStyle='#fff';ctx.fill();ctx.closePath();
+            if(!gameStarted&&!gameOver){
+                ctx.fillStyle='#0ff';
+                ctx.font='16px Courier New';
+                ctx.textAlign='center';
+                ctx.fillText(isMobile?'TAP TO START':'PRESS SPACE TO START',canvas.width/2,canvas.height/2);
+            }
+        }
+
+        /* ---------- GAME LOOP ---------- */
+        function update(){
+            if(gameOver||!gameStarted)return;
+            if(!isMobile){
+                if(leftPressed&&paddle.x>0)paddle.x-=paddle.speed;
+                if(rightPressed&&paddle.x<canvas.width-paddle.width)paddle.x+=paddle.speed;
+            }
+            ball.x+=ball.dx;ball.y+=ball.dy;
+            if(ball.x-ball.radius<=0||ball.x+ball.radius>=canvas.width){ball.dx=-ball.dx;beep(400,.1);}
+            if(ball.y-ball.radius<=0){ball.dy=-ball.dy;beep(400,.1);}
+            if(ball.y+ball.radius>=paddle.y&&
+               ball.y-ball.radius<=paddle.y+paddle.height&&
+               ball.x>=paddle.x&&ball.x<=paddle.x+paddle.width){
+                const hit=(ball.x-paddle.x)/paddle.width;
+                const angle=(hit-.5)*Math.PI/3;
+                const spd=Math.hypot(ball.dx,ball.dy);
+                ball.dx=spd*Math.sin(angle)+(isMobile?0:paddle.dx*.5);
+                ball.dy=-Math.abs(spd*Math.cos(angle));
+                beep(300,.1);
+            }
+            for(let b of bricks){
+                if(!b.destroyed&&
+                   ball.x>b.x&&ball.x<b.x+b.width&&
+                   ball.y>b.y&&ball.y<b.y+b.height){
+                    b.destroyed=true;score++;updateHUD();
+                    if(score%100===0){ballsLeft++;updateHUD();beep(800,.3);}
+                    beep(600,.1);
+                    const bcx=b.x+b.width/2,bcy=b.y+b.height/2;
+                    if(Math.abs(ball.x-bcx)>Math.abs(ball.y-bcy))ball.dx=-ball.dx;
+                    else ball.dy=-ball.dy;
+                    if(bricks.every(br=>br.destroyed)){
+                        level++;ball.speed*=1.1;
+                        makeBricks();resetBall();updateHUD();beep(1000,.5);
+                    }
+                    break;
+                }
+            }
+            if(ball.y>canvas.height){
+                ballsLeft--;updateHUD();
+                if(ballsLeft<=0){
+                    gameOver=true;
+                    gameOverMsg.textContent='GAME OVER';
+                    finalScoreEl.textContent='FINAL SCORE: '+score;
+                    gameOverDiv.style.display='block';
+                    beep(200,.5,'sawtooth');
+                }else{resetBall();beep(150,.2,'sawtooth');}
+            }
+            draw();
+        }
+
+        /* ---------- DESKTOP CONTROLS ---------- */
+        document.addEventListener('keydown',e=>{
+            if(e.key==='ArrowLeft')leftPressed=true;
+            if(e.key==='ArrowRight')rightPressed=true;
+            if(e.key===' '&&!gameStarted){gameStarted=true;beep(500,.1);}
+        });
+        document.addEventListener('keyup',e=>{
+            if(e.key==='ArrowLeft')leftPressed=false;
+            if(e.key==='ArrowRight')rightPressed=false;
+        });
+
+        /* ---------- MOBILE TOUCH ---------- */
+        if(isMobile){
+            document.body.addEventListener('touchstart',e=>e.preventDefault(),{passive:false});
+            document.body.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
+            let touchX=null;
+            canvas.addEventListener('touchstart',e=>{
+                if(!gameStarted){gameStarted=true;beep(500,.1);}
+                touchX=e.touches[0].clientX;
+            });
+            canvas.addEventListener('touchmove',e=>{
+                if(touchX!==null){
+                    const dx=e.touches[0].clientX-touchX;
+                    paddle.x+=dx;
+                    paddle.x=Math.max(0,Math.min(canvas.width-paddle.width,paddle.x));
+                    touchX=e.touches[0].clientX;
+                }
+            });
+            canvas.addEventListener('touchend',_=>touchX=null);
+            gameOverDiv.addEventListener('touchend', restartGame);
+        }
+
+        /* ---------- INIT ---------- */
+        function init(){
+            makeBricks();
+            resetBall();
+            updateHUD();
+            gameOverDiv.style.display='none';
+            gameOver=false;
+            draw();
+        }
+        function restartGame(){score=0;level=1;ballsLeft=3;ball.speed=4;init();}
+        function loop(){update();requestAnimationFrame(loop);}
+        init();loop();
+    </script>
+</body>
+</html>

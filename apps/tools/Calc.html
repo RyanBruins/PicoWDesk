@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="window-defaults" content='{"top":200,"left":150,"width":300,"height":250}'>
+<title>Calculator</title>
+<style>
+body{margin:0;background:#c0c0c0;font-family:Tahoma}
+#calc{max-width:200px;margin:20px auto;background:silver;padding:5px;border-radius:3px;box-shadow:inset 0 0 0 1px #fff,inset 0 0 0 2px grey}
+#display{background:#000;color:#0f0;padding:4px;text-align:right;font-family:monospace;margin-bottom:4px}
+button{width:40px;height:30px;margin:2px;font-size:14px}
+</style>
+</head>
+<body>
+<div id="calc">
+  <div id="display">0</div>
+  <div>
+    <button onclick="press('7')">7</button><button onclick="press('8')">8</button><button onclick="press('9')">9</button><button onclick="press('/')">/</button>
+  </div>
+  <div>
+    <button onclick="press('4')">4</button><button onclick="press('5')">5</button><button onclick="press('6')">6</button><button onclick="press('*')">*</button>
+  </div>
+  <div>
+    <button onclick="press('1')">1</button><button onclick="press('2')">2</button><button onclick="press('3')">3</button><button onclick="press('-')">-</button>
+  </div>
+  <div>
+    <button onclick="press('0')">0</button><button onclick="press('C')">C</button><button onclick="press('=')">=</button><button onclick="press('+')">+</button>
+  </div>
+</div>
+<script>
+let expr="";
+const disp=document.getElementById("display");
+function press(k){
+  if(k==="C"){expr="";}
+  else if(k==="="){ try{expr=eval(expr)+"";}catch(e){expr="Error";} }
+  else expr+=k;
+  disp.textContent=expr||"0";
+}
+</script>
+</body>
+</html>

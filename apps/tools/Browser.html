@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="window-defaults" content='{"top":100,"left":100,"width":640,"height":480}'>
+<meta http-equiv="Content-Security-Policy" content="frame-ancestors *">
+<title>Browser</title>
+<link rel="icon" href="Browser.ico">
+<style>
+body{margin:0;display:flex;flex-direction:column;height:100vh}
+#bar{display:flex;background:#eee;padding:4px}
+#url{flex:1}
+iframe{flex:1;border:none}
+</style>
+</head>
+<body>
+<div id="bar">
+  <button onclick="go()">Go</button>
+  <input id="url" placeholder="http:// or search term">
+</div>
+<iframe id="frame" src="about:blank"></iframe>
+<script>
+function go(){
+  let u=document.getElementById("url").value.trim();
+  if(!u) return;
+  if(!u.startsWith("http")) u="https://www.google.com/search?q="+encodeURIComponent(u);
+  document.getElementById("frame").src=u;
+}
+document.getElementById("url").onkeydown=e=>{if(e.key==="Enter") go();}
+</script>
+</body>
+</html>

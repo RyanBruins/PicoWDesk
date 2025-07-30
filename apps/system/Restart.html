@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="window-defaults" content='{"top":250,"left":250,"width":300,"height":230}'>
+<title>Restart Pico</title>
+<style>
+body{margin:0;font-family:-apple-system;padding:40px;background:#f7f7f7;text-align:center}
+button{padding:10px 20px;font-size:18px}
+</style>
+</head>
+<body>
+<h2>Restart Pico</h2>
+<button onclick="restart()">Restart Now</button>
+<script>
+async function restart(){
+  await fetch("/api/restart",{method:"POST"});
+  alert("Restarting…");
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,260 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="window-defaults" content='{"top":100,"left":100,"width":640,"height":480}'>
+<title>Terminal</title>
+<style>
+html,body{margin:0;height:100%}
+body{
+  font-family:monospace;
+  background:#000;
+  color:#0f0;
+  display:flex;
+  flex-direction:column;
+}
+#term{
+  flex:1;
+  padding:10px;
+  white-space:pre-wrap;
+  overflow-y:auto;
+  line-height:1.3;
+}
+#in{
+  display:flex;
+  padding:0 10px 10px 10px;
+}
+#in span{white-space:pre}
+#in input{
+  flex:1;
+  background:#000;
+  color:#0f0;
+  border:none;
+  outline:none;
+  font-family:inherit;
+}
+</style>
+</head>
+<body>
+<div id="term"></div>
+<div id="in">
+  <span id="prompt">/ $ </span>
+  <input id="cmd" autocomplete="off">
+</div>
+
+<script>
+/* ---------- helpers ---------- */
+const term   = document.getElementById("term");
+const cmd    = document.getElementById("cmd");
+const prompt = document.getElementById("prompt");
+let   cwd    = "";               // current virtual folder (empty = root)
+
+/* ---------- print helpers ---------- */
+function print(text){
+  term.insertAdjacentHTML("beforeend", text.replace(/\n/g,"<br>") + "<br>");
+  term.scrollTop = term.scrollHeight;
+}
+
+/* ---------- API abstractions ---------- */
+async function api(path, opts={}){           // simple wrapper
+  const r = await fetch(path, opts);
+  if(!r.ok) throw new Error(await r.text() || "HTTP "+r.status);
+  return r;
+}
+
+/* ---------- virtual folder helpers ---------- */
+function parseFolder(fname){
+  if(!fname.startsWith("_")) return null;
+  const parts=fname.split("_");
+  if(parts.length<3) return null;
+  return {folder:parts[1], name:parts.slice(2).join("_")};
+}
+
+/* ---------- command implementations ---------- */
+const COMMANDS={
+  async ls(){
+    const list=await api("/api/list").then(r=>r.json());
+    const info=await api("/api/info").then(r=>r.json());
+
+    // collect folders
+    const folders=new Set();
+    list.forEach(f=>{
+      const p=parseFolder(f.name);
+      if(p) folders.add(p.folder);
+    });
+
+    // build output arrays
+    const outFolders=[], outFiles=[];
+    list.forEach(f=>{
+      const p=parseFolder(f.name);
+      if(cwd){
+        if(p && p.folder===cwd) outFiles.push({name:p.name, size:f.size});
+      }else{
+        if(!p && f.name!=="index.html") outFiles.push({name:f.name, size:f.size});
+      }
+    });
+
+    // sort
+    const sortedFolders=[...folders].sort();
+    const sortedFiles=outFiles.sort((a,b)=>a.name.localeCompare(b.name));
+
+    // max width for padding
+    const allNames=[...sortedFolders.map(f=>"/"+f), ...sortedFiles.map(f=>f.name)];
+    const maxLen=allNames.reduce((m,n)=>Math.max(m,n.length),0) + 2;
+
+    // folders
+    sortedFolders.forEach(f=>{
+      term.insertAdjacentHTML("beforeend", ("/"+f).padEnd(maxLen) + "    &lt;DIR&gt;<br>");
+    });
+
+    // files
+    sortedFiles.forEach(f=>{
+      term.insertAdjacentHTML("beforeend", f.name.padEnd(maxLen) + f.size.toLocaleString().padStart(10) + " bytes<br>");
+    });
+
+    // totals
+    print("\nTotal used: "+info.fs_total.toLocaleString()+" bytes");
+    print("Free  space: "+info.fs_free.toLocaleString()+" bytes");
+  },
+
+  async cd(args){
+    const dir=args[0]||"";
+    if(dir===".." && cwd){
+      cwd="";
+      prompt.textContent="/ $ ";
+      return;
+    }
+    if(dir==="/" || dir===""){
+      cwd="";
+      prompt.textContent="/ $ ";
+      return;
+    }
+    if(!dir.match(/^[A-Za-z0-9_-]+$/)){
+      print("cd: invalid folder name");
+      return;
+    }
+    // check folder exists
+    const list=await api("/api/list").then(r=>r.json());
+    const folders=new Set();
+    list.forEach(f=>{
+      const p=parseFolder(f.name);
+      if(p) folders.add(p.folder);
+    });
+    if(!folders.has(dir)){
+      print("cd: folder not found: "+dir);
+      return;
+    }
+    cwd=dir;
+    prompt.textContent=`/${dir} $ `;
+  },
+
+  async edit(args){
+    const file=args[0];
+    if(!file){print("Usage: edit <file>");return;}
+    const name=cwd ? `_${cwd}_${file}` : file;
+    parent.launch("Editor.html?file="+encodeURIComponent(name));
+  },
+
+  async rm(args){
+    const file=args[0];
+    if(!file){print("Usage: rm <file>");return;}
+    const name=cwd ? `_${cwd}_${file}` : file;
+    if(!confirm("Delete "+name+"?")) return;
+    try{
+      await api("/api/delete/"+encodeURIComponent(name), {method:"POST"});
+      print("deleted "+name);
+    }catch(e){print("rm: "+e.message);}
+  },
+
+  async mv(args){
+    const [src,dest]=args;
+    if(!src||!dest){print("Usage: mv <src> <dest>");return;}
+    const srcName=cwd ? `_${cwd}_${src}` : src;
+    const destName=dest==="/" ? src : dest.startsWith("/") ? dest.slice(1) : `_${cwd}_${dest}`;
+    try{
+      const data=await api("/api/read/"+encodeURIComponent(srcName)).then(r=>r.text());
+      await api("/api/write/"+encodeURIComponent(destName), {method:"POST", body:data});
+      await api("/api/delete/"+encodeURIComponent(srcName), {method:"POST"});
+      print("moved");
+    }catch(e){print("mv: "+e.message);}
+  },
+
+  async cp(args){
+    const [src,dest]=args;
+    if(!src||!dest){print("Usage: cp <src> <dest>");return;}
+    const srcName=cwd ? `_${cwd}_${src}` : src;
+    const destName=dest==="/" ? src+"_copy" : dest.startsWith("/") ? dest.slice(1) : `_${cwd}_${dest}`;
+    try{
+      const data=await api("/api/read/"+encodeURIComponent(srcName)).then(r=>r.text());
+      await api("/api/write/"+encodeURIComponent(destName), {method:"POST", body:data});
+      print("copied");
+    }catch(e){print("cp: "+e.message);}
+  },
+
+  async touch(args){
+    const file=args[0];
+    if(!file){print("Usage: touch <file>");return;}
+    const name=cwd ? `_${cwd}_${file}` : file;
+    try{
+      await api("/api/write/"+encodeURIComponent(name), {method:"POST", body:""});
+      print("created "+name);
+    }catch(e){print("touch: "+e.message);}
+  },
+
+  echo(args){
+    print(args.join(" "));
+  },
+
+  help(){
+    print(`Available commands:
+  ls              – list files
+  cd &lt;folder|/|..&gt; – change folder
+  edit &lt;file&gt;     – open file in editor
+  rm &lt;file&gt;       – delete file
+  mv &lt;src&gt; &lt;dest&gt; – move/rename file
+  cp &lt;src&gt; &lt;dest&gt; – copy file
+  touch &lt;file&gt;    – create empty file
+  echo &lt;text&gt;     – print text
+  help            – this help
+  &lt;AppName&gt;       – launch .html app`);
+  },
+
+  async launch(app){
+    const bare=app+".html";
+    const foldered=`_${cwd}_${bare}`;
+    const list=await api("/api/list").then(r=>r.json());
+    let target=null;
+    if(list.some(f=>f.name===bare)) target=bare;
+    else if(list.some(f=>f.name===foldered)) target=foldered;
+    else if(list.some(f=>f.name===("_"+app+"_"+app+".html"))) target="_"+app+"_"+app+".html";
+    if(target){
+      parent.launch(target);
+    }else{
+      print("App not found: "+app);
+    }
+  }
+};
+
+/* ---------- main loop ---------- */
+cmd.addEventListener("keydown",e=>{
+  if(e.key!=="Enter") return;
+  const line=cmd.value.trim();
+  cmd.value="";
+  if(!line) return;
+
+  print((cwd?`/${cwd} `:"/")+"$ "+line);
+  const [cmdName,...args]=line.split(/\s+/);
+
+  if(COMMANDS[cmdName]){
+    COMMANDS[cmdName](args);
+  }else{
+    COMMANDS.launch(cmdName).catch(()=>print("Unknown command: "+cmdName));
+  }
+});
+
+/* ---------- startup ---------- */
+print("PicoWDesk Terminal ready.");
+print("Type 'help' for a list of commands.\n");
+</script>
+</body>
+</html>

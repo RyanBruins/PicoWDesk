@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="window-defaults" content='{"top":200,"left":100,"width":640,"height":480}'>
+<title>Editor</title>
+<style>
+body{margin:0;font-family:-apple-system;display:flex;flex-direction:column;height:100vh}
+#bar{background:#eee;padding:5px;display:flex;gap:10px;align-items:center}
+button{padding:4px 8px}
+#editor{flex:1;border:none;font-family:monospace;padding:10px;resize:none;outline:none}
+/* open-dialog overlay */
+#openDlg{
+  position:fixed;inset:0;
+  background:rgba(0,0,0,.65);
+  display:flex;justify-content:center;align-items:center;
+  z-index:1000
+}
+#openDlg.hidden{display:none}
+#openBox{
+  background:#fff;border-radius:6px;
+  padding:15px 20px;max-width:90vw;max-height:80vh;overflow:auto
+}
+#openBox ul{margin:0;padding:0;list-style:none}
+#openBox li{padding:4px 0}
+#openBox a{color:#06c;text-decoration:none}
+#openBox a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div id="bar">
+  <button onclick="openFile()">Open</button>
+  <button onclick="save()">Save</button>
+  <button onclick="saveAs()">Save As</button>
+  <span id="fname"></span>
+</div>
+<textarea id="editor" spellcheck="false"></textarea>
+
+<!-- file-picker overlay -->
+<div id="openDlg" class="hidden">
+  <div id="openBox">
+    <ul id="fileList"></ul>
+  </div>
+</div>
+
+<script>
+// ---------- state ----------
+let current = '';                       // current file name
+const ed = document.getElementById('editor');
+const fn = document.getElementById('fname');
+const openDlg = document.getElementById('openDlg');
+const fileList = document.getElementById('fileList');
+
+// ---------- cookies ----------
+const CK_FILE = 'edFile';
+const CK_SCROLL = 'edScroll';
+function setCookie(k,v){ document.cookie = k + '=' + v + '; path=/'; }
+function getCookie(k,def=''){ return (document.cookie.match('(^|;)\\s*' + k + '=([^;]*)') || [])[2] || def; }
+
+// ---------- startup ----------
+window.onload = async () => {
+  // restore scroll before content loads (avoids flicker)
+  ed.scrollTop = parseInt(getCookie(CK_SCROLL, 0), 10);
+
+  const url = new URLSearchParams(location.search);
+  const fileFromURL = url.get('file');
+  const fileToLoad = fileFromURL || getCookie(CK_FILE, '');
+
+  if (fileToLoad) await loadFile(fileToLoad);
+};
+
+// persist scroll every time it changes
+ed.addEventListener('scroll', () => setCookie(CK_SCROLL, ed.scrollTop));
+
+// ---------- open dialog ----------
+async function openFile() {
+  const list = await fetch('/api/list').then(r => r.json());
+  // skip restricted files and image files
+  const forbiddenExts = new Set(['png','jpg','jpeg','gif','ico']);
+  const choices = list
+    .filter(f => !f.restricted)
+    .filter(f => {
+      const ext = f.name.split('.').pop().toLowerCase();
+      return !forbiddenExts.has(ext);
+    })
+    .map(f => f.name)
+    .sort((a, b) => a.localeCompare(b));
+
+  fileList.innerHTML = '';
+  choices.forEach(name => {
+    const li = document.createElement('li');
+    const a  = document.createElement('a');
+    a.href = '#';
+    a.textContent = name;
+    a.onclick = (e) => {
+      e.preventDefault();
+      closeDlg();
+      loadFile(name);
+    };
+    li.appendChild(a);
+    fileList.appendChild(li);
+  });
+  openDlg.classList.remove('hidden');
+}
+function closeDlg() { openDlg.classList.add('hidden'); }
+openDlg.addEventListener('click', e => { if (e.target === openDlg) closeDlg(); });
+
+// ---------- load / save ----------
+async function loadFile(name) {
+  current = name;
+  fn.textContent = name;
+  setCookie(CK_FILE, name);
+
+  const resp = await fetch('/api/download/' + encodeURIComponent(name));
+  if (!resp.ok) { alert('Cannot open: ' + name); return; }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, {stream: true});
+  }
+  ed.value = text;
+  ed.scrollTop = parseInt(getCookie(CK_SCROLL, 0), 10);
+}
+function save() {
+  if (!current) return saveAs();
+  fetch('/api/write/' + encodeURIComponent(current), { method: 'POST', body: ed.value });
+}
+function saveAs() {
+  let name = prompt('Save as:');
+  if (!name) return;
+  name = name.trim();          // <-- remove leading/trailing spaces, CR, LF
+  current = name;
+  fn.textContent = name;
+  setCookie(CK_FILE, name);
+  save();
+}
+window.onbeforeunload = () => {
+  setCookie(CK_SCROLL, ed.scrollTop);
+  return ed.value !== ed.defaultValue ? '' : undefined;
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pico W Desktop</title>
+<link rel="icon" href="favicon.ico" type="image/x-icon"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<style>
+:root{
+  --dockHeight:70px;
+  --windowTitle:28px;
+  --accent:#0066ff;
+  --osBar:48px;
+}
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto}
+body,html{height:100%;overflow:hidden;background:url('data:image/svg+xml,\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">\
+<defs><radialGradient id="g"><stop offset="0%" stop-color="%23ff00ff"/><stop offset="100%" stop-color="%2300ffff"/></radialGradient></defs>\
+<rect width="100" height="100" fill="url(%23g)"/></svg>') center/cover}
+#desktop{position:absolute;inset:0}
+#dock{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);display:flex;gap:10px;padding:10px;border-radius:20px;background:rgba(255,255,255,.25);backdrop-filter:blur(10px);z-index:9999}
+
+/* --- FOLDER PANEL --- */
+.folder-panel{
+  position:fixed;
+  top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  background:#fff;
+  border-radius:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.3);
+  z-index:99999;
+  display:flex;
+  flex-direction:column;
+  min-width:280px;
+  max-height:80vh;
+}
+.folder-panel .titlebar{
+  height:var(--windowTitle);
+  background:var(--accent);
+  color:#fff;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:0 10px;
+  border-radius:10px 10px 0 0;
+}
+.folder-panel .close{
+  width:14px;height:14px;border-radius:50%;background:#ff5f57;cursor:pointer;
+}
+.folder-grid{
+  padding:10px;
+  overflow-y:auto;
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(60px,1fr));
+  gap:10px;
+}
+.folder-grid-item{
+  text-align:center;
+  cursor:pointer;
+}
+.folder-grid-item img{
+  width:40px;height:40px;display:block;margin:0 auto 4px;
+}
+.folder-grid-item span{
+  font-size:12px;
+  color:#000;
+}
+
+/* --- MOBILE ONLY --- */
+#osBar{
+  display:none;
+  position:fixed;
+  top:0;
+  left:0;
+  right:0;
+  height:var(--osBar);
+  background:#0008;
+  color:#fff;
+  align-items:center;
+  justify-content:space-between;
+  padding:0 12px;
+  z-index:10000;
+}
+#hamburger{
+  font-size:24px;
+  cursor:pointer;
+}
+#mobileMenu{
+  display:none;
+  position:fixed;
+  top:var(--osBar);
+  left:0;
+  right:0;
+  bottom:0;
+  background:#000c;
+  z-index:9999;
+}
+.grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(72px,1fr));
+  gap:10px;
+  padding:10px;
+}
+.grid-item{
+  background:#fff;
+  border-radius:12px;
+  aspect-ratio:1/1;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background-size:cover;
+}
+.dock-item,.dock-folder{
+  width:50px;height:50px;border-radius:12px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;background-size:cover
+}
+.window{position:absolute;min-width:300px;min-height:200px;background:#fff;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.3);display:flex;flex-direction:column;resize:both;overflow:hidden}
+.titlebar{height:var(--windowTitle);background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 10px;cursor:move;user-select:none}
+.controls{display:flex;gap:6px}
+.close,.max{width:14px;height:14px;border-radius:50%;cursor:pointer}
+.close{background:#ff5f57}.max{background:#28ca42}
+iframe{border:none;flex:1;width:100%;height:calc(100% - var(--windowTitle))}
+
+/* --- mobile overrides --- */
+body.mobile #dock{display:none}
+body.mobile #osBar{display:flex}
+body.mobile .window{
+  inset:var(--osBar) 0 0 0 !important;
+  width:100% !important;
+  height:calc(100% - var(--osBar)) !important;
+  border-radius:0;
+  resize:none;
+}
+body.mobile .titlebar{cursor:default}
+body.mobile .max{display:none}
+</style>
+</head>
+<body>
+<div id="desktop"></div>
+<div id="dock"></div>
+
+<!-- mobile chrome -->
+<div id="osBar">
+  <span id="osTitle">PicoWDesk</span>
+  <span id="hamburger">☰</span>
+</div>
+<div id="mobileMenu">
+  <div class="grid" id="mobileGrid"></div>
+</div>
+
+<script>
+const desktop = document.getElementById('desktop');
+const dock    = document.getElementById('dock');
+const osBar   = document.getElementById('osBar');
+const mobileMenu = document.getElementById('mobileMenu');
+const mobileGrid = document.getElementById('mobileGrid');
+let z = 1;
+
+/* ---------- mobile detection ---------- */
+const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+                 (('ontouchstart' in window) && window.innerWidth <= 768);
+if (isMobile) document.body.classList.add('mobile');
+
+/* ---------- persistent window state ---------- */
+const STORAGE_KEY = 'picowdesk_windows';
+function readState() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }
+  catch { return {}; }
+}
+function writeState(state) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+let windowState = readState();
+
+/* ---------- utility ---------- */
+async function api(path,opt){ return fetch(path,opt).then(r=>r.text()); }
+async function getJSON(path){ return fetch(path).then(r=>r.json()); }
+
+/* ---------- folder helpers ---------- */
+function parseFolder(filename){
+  if(!filename.startsWith("_")) return null;
+  const parts = filename.split("_");
+  if(parts.length<3) return null;
+  return {folder: parts[1], name: parts.slice(2).join("_").replace(".html",""), file: filename};
+}
+function groupByFolder(files){
+  const folders = {};
+  const loose = [];
+  files.forEach(f=>{
+    const parsed = parseFolder(f.name);
+    if(parsed){
+      if(!folders[parsed.folder]) folders[parsed.folder]=[];
+      folders[parsed.folder].push(parsed);
+    }else{
+      loose.push(f);
+    }
+  });
+  return {folders, loose};
+}
+
+/* ---------- dock & mobile grid ---------- */
+let openFolderPanel = null;
+function closeFolderPanel(){
+  if(openFolderPanel){
+    openFolderPanel.remove();
+    openFolderPanel=null;
+  }
+}
+function showFolderPanel(folderName, apps){
+  closeFolderPanel();
+  const panel=document.createElement("div");
+  panel.className="folder-panel";
+  panel.style.zIndex=99999;
+  const title=document.createElement("div");
+  title.className="titlebar";
+  title.innerHTML=`<span>${folderName}</span><div class="close"></div>`;
+  panel.appendChild(title);
+  const grid=document.createElement("div");
+  grid.className="folder-grid";
+  apps.forEach(app=>{
+    const item=document.createElement("div");
+    item.className="folder-grid-item";
+    item.title=app.name;
+    item.innerHTML=`
+      <img src="${app.name}.ico" onerror="this.src='data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'><text y=\'.9em\' font-size=\'90\'>📄</text></svg>'"/>
+      <span>${app.name}</span>`;
+    item.onclick=()=>{launch(app.file); closeFolderPanel();};
+    grid.appendChild(item);
+    
+  });
+  panel.appendChild(grid);
+  desktop.appendChild(panel);
+  openFolderPanel=panel;
+  title.querySelector(".close").onclick=closeFolderPanel;
+  makeDraggable(panel, title);
+}
+
+/* ---------- built-in list ----------   Removed so blank icons do not appear on base install.
+const BUILTIN_DOCK = new Set([
+  "FileManager.html","Editor.html","Viewer.html",
+  "Terminal.html"
+]);
+*/
+
+async function refreshDock(){
+  dock.innerHTML="";
+  if (mobileGrid) mobileGrid.innerHTML="";
+
+  const files = await getJSON("/api/list");
+  const htmlFiles = files.filter(f=>f.name.endsWith('.html') && f.name!=="index.html");
+  const {folders, loose} = groupByFolder(htmlFiles);
+
+  /* 1. built-ins (always listed)   - Removed so blank icons do not appear on base install.
+  BUILTIN_DOCK.forEach(name=>{
+    addDockIcon(name,name.replace(".html",""));
+    if(isMobile) addMobileIcon(name,name.replace(".html",""));
+  });
+*/
+  /* 2. folders */
+  for(const [folderName, apps] of Object.entries(folders)){
+    addFolderIcon(folderName, apps);
+    if(isMobile) addMobileFolderIcon(folderName, apps);
+  }
+
+  /* 3. loose user apps (not built-in, not in folder) */
+  loose.forEach(f=>{
+   // if(BUILTIN_DOCK.has(f.name)) return;     // already shown - REMOVED 
+    addDockIcon(f.name,f.name.replace(".html",""));
+    if(isMobile) addMobileIcon(f.name,f.name.replace(".html",""));
+  });
+
+  /* restore previously-open windows */
+  for (const src of Object.keys(windowState)){
+    if(windowState[src].open) await launch(src,true);
+  }
+}
+
+function addFolderIcon(folderName, apps){
+  const div=document.createElement("div");
+  div.className="dock-folder"; div.title=folderName;
+  const ico=document.createElement("img");
+  ico.src = folderName+".ico";
+  ico.style.width="100%";
+  ico.onerror=()=>ico.src="folder.ico";
+  div.appendChild(ico);
+  div.onclick=()=>showFolderPanel(folderName, apps);
+  dock.appendChild(div);
+}
+function addMobileFolderIcon(folderName, apps){
+  if(!mobileGrid) return;
+  const div=document.createElement("div");
+  div.className="grid-item"; div.title=folderName;
+  const ico=document.createElement("img");
+  ico.src = folderName+".ico";
+  ico.style.width="60%";
+  ico.onerror=()=>ico.src="folder.ico";
+  div.appendChild(ico);
+  div.onclick=()=>{showFolderPanel(folderName,apps); toggleMenu();};
+  mobileGrid.appendChild(div);
+}
+
+function addDockIcon(file,label){
+  const div=document.createElement("div");
+  div.className="dock-item"; div.title=label;
+  const ico=document.createElement("img");
+  ico.src = file.replace(".html",".ico");
+  ico.style.width="100%";
+  ico.onerror=()=>ico.src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>";
+  div.appendChild(ico);
+  div.onclick=async ()=>{closeFolderPanel(); await launch(file);};
+  dock.appendChild(div);
+}
+function addMobileIcon(file,label){
+  if(!mobileGrid) return;
+  const div=document.createElement("div");
+  div.className="grid-item"; div.title=label;
+  const ico=document.createElement("img");
+  ico.src = file.replace(".html",".ico");
+  ico.style.width="60%";
+  ico.onerror=()=>ico.src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>";
+  div.appendChild(ico);
+  div.onclick=async ()=>{closeFolderPanel(); await launch(file); toggleMenu();};
+  mobileGrid.appendChild(div);
+}
+
+/* ---------- window management ---------- */
+async function launch(src,noStore=false){
+  closeFolderPanel();
+  if(document.querySelector(`iframe[src='${src}']`)){
+    document.querySelector(`iframe[src='${src}']`).parentElement.style.zIndex=++z;
+    return;
+  }
+  if(windowState[src]){
+    reallyLaunch(src, windowState[src], noStore);
+    return;
+  }
+  try{
+    const html = await api('/'+src, {credentials:"same-origin"});
+    const m = html.match(/<meta\s+name=["']window-defaults["']\s+content=(["'])(.*?)\1/i);
+    let geo = { top:60, left:80, width:640, height:480 };
+    if(m){ try{ Object.assign(geo, JSON.parse(m[2])); }catch(e){} }
+    reallyLaunch(src, geo, noStore);
+  }catch(e){
+    reallyLaunch(src, {top:60, left:80, width:640, height:480}, noStore);
+  }
+}
+
+/*strip out parameters from title text*/
+function removeParams(src) {
+  let cleaned = src;
+  // 1. Remove everything after and including '?'
+  const queryIndex = cleaned.indexOf('?');
+  if (queryIndex !== -1) {
+    cleaned = cleaned.substring(0, queryIndex);
+  }
+  // 2. Remove leading '/' if it exists
+  if (cleaned.startsWith('/')) {
+    cleaned = cleaned.substring(1);
+  }
+  return cleaned;
+}
+
+
+function reallyLaunch(src, geo, noStore) {
+  const win = document.createElement("div");
+  win.className = "window";
+  win.style.zIndex = ++z;
+  const st = windowState[src];
+  const startMax = isMobile || (st?.maximized || false);
+  if (startMax) {
+    win.style.inset = isMobile ? "var(--osBar) 0 0 0" : "0";
+    win.style.width = "100%";
+    win.style.height = isMobile ? "calc(100% - var(--osBar))" : "100%";
+    win.style.borderRadius = "0";
+  } else {
+    win.style.top = (st?.top ?? geo.top) + "px";
+    win.style.left = (st?.left ?? geo.left) + "px";
+    win.style.width = (st?.width ?? geo.width) + "px";
+    win.style.height = (st?.height ?? geo.height) + "px";
+  }
+  const title = document.createElement("div");
+  title.className = "titlebar";
+  
+  /*-- Handle Apps in Folder's Names --*/
+  const paramsRemoved = removeParams(src);
+  const clean = (s => {
+    const parsed = parseFolder(paramsRemoved);
+    return parsed ? `${parsed.folder} – ${parsed.name}` : s.replace(".html", "");
+  })(paramsRemoved);
+
+  title.textContent = clean;
+  const controls = document.createElement("div");
+  controls.className = "controls";
+
+  const max = document.createElement("div");
+  max.className = "max";
+  const close = document.createElement("div");
+  close.className = "close";
+
+  if (!isMobile) controls.appendChild(max);
+  controls.appendChild(close);
+  title.appendChild(controls);
+  win.appendChild(title);
+
+  const frame = document.createElement("iframe");
+  frame.src = src;
+  win.appendChild(frame);
+  desktop.appendChild(win);
+
+  if (!isMobile) {
+    makeDraggable(win, title);
+    const saveGeo = () => {
+      if (!windowState[src]) windowState[src] = {};
+      const maxed = windowState[src]?.maximized || false;
+      if (maxed) return;
+      Object.assign(windowState[src], {
+        top: parseInt(win.style.top),
+        left: parseInt(win.style.left),
+        width: win.offsetWidth,
+        height: win.offsetHeight,
+        open: true,
+        maximized: false
+      });
+      writeState(windowState);
+    };
+    win.addEventListener("mouseup", saveGeo);
+    win.addEventListener("resize", saveGeo);
+  }
+
+  if (!isMobile) {
+    max.onclick = () => {
+      const maxed = windowState[src]?.maximized || false;
+      if (maxed) {
+        const restore = windowState[src]?.restore || geo;
+        win.style.position = "absolute";
+        win.style.inset = "";
+        win.style.top = restore.top + "px";
+        win.style.left = restore.left + "px";
+        win.style.width = restore.width + "px";
+        win.style.height = restore.height + "px";
+        win.style.borderRadius = "10px";
+        win.style.zIndex = ++z;
+        windowState[src].maximized = false;
+      } else {
+        const current = {
+          top: parseInt(win.style.top) || 0,
+          left: parseInt(win.style.left) || 0,
+          width: win.offsetWidth,
+          height: win.offsetHeight
+        };
+        windowState[src].restore = current;
+        windowState[src].maximized = true;
+        win.style.inset = "0";
+        win.style.width = "100%";
+        win.style.height = "100%";
+        win.style.borderRadius = "0";
+        win.style.zIndex = ++z;
+      }
+      writeState(windowState);
+    };
+  }
+
+  close.onclick = () => {
+    desktop.removeChild(win);
+    if (windowState[src]) {
+      windowState[src].open = false;
+      writeState(windowState);
+    }
+  };
+
+  if (!noStore) {
+    if (!windowState[src]) windowState[src] = {};
+    windowState[src].maximized = startMax;
+    if (!startMax || isMobile) {
+      Object.assign(windowState[src], {
+        top: parseInt(win.style.top),
+        left: parseInt(win.style.left),
+        width: win.offsetWidth,
+        height: win.offsetHeight,
+        open: true
+      });
+    }
+    writeState(windowState);
+  }
+}
+
+function makeDraggable(win,handle){
+  let ox,oy;
+  handle.onmousedown=e=>{
+    if (isMobile) return;
+    win.style.zIndex=++z;
+    ox=e.clientX-win.offsetLeft;
+    oy=e.clientY-win.offsetTop;
+    document.onmousemove=ev=>{
+      win.style.left=Math.max(0,ev.clientX-ox)+'px';
+      win.style.top =Math.max(0,ev.clientY-oy)+'px';
+    };
+    document.onmouseup=()=>{document.onmousemove=null;};
+  };
+}
+
+/* ---------- mobile menu helpers ---------- */
+function toggleMenu(){
+  if(!mobileMenu) return;
+  mobileMenu.style.display = mobileMenu.style.display==='block' ? 'none' : 'block';
+}
+if(document.getElementById('hamburger')){
+  document.getElementById('hamburger').addEventListener('click',toggleMenu);
+}
+
+/* ---------- click-outside to close folder panel ---------- */
+desktop.addEventListener("click", e=>{
+  if(openFolderPanel && !openFolderPanel.contains(e.target) && !e.target.closest("#dock"))
+    closeFolderPanel();
+});
+
+/* ---------- boot ---------- */
+refreshDock();
+</script>
+</body>
+</html>

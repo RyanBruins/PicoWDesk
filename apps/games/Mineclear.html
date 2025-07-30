@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="window-defaults" content='{"top":100,"left":150,"width":700,"height":650}'>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>MINECLEAR</title>
+<style>
+    /* ---------- DESKTOP ---------- */
+    body{margin:0;padding:0;background:#000;color:#0ff;font-family:'Courier New',monospace;text-align:center;overflow:hidden;}
+    #game-container{position:relative;width:320px;margin:0 auto;}
+    #title{font-size:28px;letter-spacing:4px;margin:10px 0;text-shadow:3px 3px 0 #f0f;}
+    #scoreboard{display:flex;justify-content:space-between;font-size:16px;margin-bottom:10px;}
+    #game-canvas{border:2px solid #0ff;background:#000;display:block;margin:0 auto;}
+    #game-over{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#000;border:2px solid #0ff;padding:20px;text-align:center;display:none;}
+    button{background:#000;color:#0ff;border:1px solid #0ff;padding:10px 20px;font-family:'Courier New',monospace;font-size:16px;cursor:pointer;margin-top:10px;}
+    button:hover{background:#0ff;color:#000;}
+
+    /* ---------- MOBILE ---------- */
+    @media (max-width:700px){
+        #game-container{width:100vw;}
+        #title{font-size:5vw;margin:2vw 0;}
+        #scoreboard{font-size:3vw;margin:0 2vw 2vw;}
+        #game-canvas{width:100vw;height:100vw;border:none;}
+    }
+</style>
+</head>
+<body>
+<div id="game-container">
+    <div id="title">MINECLEAR</div>
+    <div id="scoreboard">
+        <div>SCORE: <span id="score">0</span></div>
+        <div>MINES: <span id="mines">10</span></div>
+    </div>
+    <canvas id="game-canvas" width="320" height="320"></canvas>
+    <div id="game-over">
+        <div id="game-over-message"></div>
+        <div id="final-score"></div>
+        <button onclick="restartGame()">PLAY AGAIN</button>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const minesEl = document.getElementById('mines');
+const gameOverDiv = document.getElementById('game-over');
+const gameOverMsg = document.getElementById('game-over-message');
+const finalScoreEl = document.getElementById('final-score');
+
+/* ---------- CONFIG ---------- */
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+if(isMobile){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerWidth;
+}
+
+const GRID = 12;                    // 12×12 board
+const SIZE = canvas.width / GRID;
+let board = [];
+let revealed = [];
+let flagged = [];
+let mines = [];
+let score = 0;
+let gameOver = false;
+const totalMines = 10;
+
+/* ---------- AUDIO ---------- */
+const audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+function beep(f,d,t='square'){
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = t; o.frequency.value = f; o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(.3,audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.01,audioCtx.currentTime+d);
+    o.start(); o.stop(audioCtx.currentTime+d);
+}
+
+/* ---------- INIT ---------- */
+function init(){
+    board = Array.from({length:GRID},_=>Array(GRID).fill(0));
+    revealed = Array.from({length:GRID},_=>Array(GRID).fill(false));
+    flagged = Array.from({length:GRID},_=>Array(GRID).fill(false));
+    mines = [];
+    score = 0;
+    gameOver = false;
+    gameOverDiv.style.display = 'none';
+    scoreEl.textContent = score;
+    minesEl.textContent = totalMines;
+
+    /* place mines randomly */
+    while(mines.length < totalMines){
+        const r = Math.floor(Math.random()*GRID);
+        const c = Math.floor(Math.random()*GRID);
+        const key = `${r},${c}`;
+        if(!mines.includes(key)){
+            mines.push(key);
+            board[r][c] = 9;
+        }
+    }
+    /* compute numbers */
+    for(let r=0;r<GRID;r++){
+        for(let c=0;c<GRID;c++){
+            if(board[r][c]===9) continue;
+            let count = 0;
+            for(let dr=-1;dr<=1;dr++){
+                for(let dc=-1;dc<=1;dc++){
+                    const nr=r+dr,nc=c+dc;
+                    if(nr<0||nc<0||nr>=GRID||nc>=GRID) continue;
+                    if(board[nr][nc]===9) count++;
+                }
+            }
+            board[r][c] = count;
+        }
+    }
+    draw();
+}
+
+/* ---------- DRAW ---------- */
+function draw(){
+    ctx.fillStyle='#000';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    for(let r=0;r<GRID;r++){
+        for(let c=0;c<GRID;c++){
+            const x=c*SIZE,y=r*SIZE;
+            if(!revealed[r][c]){
+                ctx.fillStyle='#111';
+                ctx.fillRect(x,y,SIZE,SIZE);
+                ctx.strokeStyle='#0ff';
+                ctx.strokeRect(x,y,SIZE,SIZE);
+                if(flagged[r][c]){
+                    ctx.fillStyle='#f0f';
+                    ctx.font=(SIZE*0.6)+'px Courier';
+                    ctx.textAlign='center';
+                    ctx.textBaseline='middle';
+                    ctx.fillText('F',x+SIZE/2,y+SIZE/2);
+                }
+            }else{
+                const val = board[r][c];
+                if(val===9){
+                    ctx.fillStyle='#f00';
+                    ctx.fillRect(x,y,SIZE,SIZE);
+                }else{
+                    ctx.fillStyle='#000';
+                    ctx.fillRect(x,y,SIZE,SIZE);
+                    if(val>0){
+                        ctx.fillStyle='#0ff';
+                        ctx.font=(SIZE*0.6)+'px Courier';
+                        ctx.textAlign='center';
+                        ctx.textBaseline='middle';
+                        ctx.fillText(val,x+SIZE/2,y+SIZE/2);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ---------- REVEAL ---------- */
+function reveal(r,c){
+    if(r<0||r>=GRID||c<0||c>=GRID||revealed[r][c]||flagged[r][c]||gameOver) return;
+    revealed[r][c]=true;
+    if(board[r][c]===9){
+        gameOver=true;
+        gameOverMsg.textContent='GAME OVER';
+        finalScoreEl.textContent='FINAL SCORE: '+score;
+        gameOverDiv.style.display='block';
+        beep(200,.5,'sawtooth');
+        /* reveal all mines */
+        for(const m of mines){
+            const [mr,mc]=m.split(',').map(Number);
+            revealed[mr][mc]=true;
+        }
+    }else{
+        score++;
+        scoreEl.textContent=score;
+        beep(400,.05);
+        if(board[r][c]===0){
+            for(let dr=-1;dr<=1;dr++){
+                for(let dc=-1;dc<=1;dc++){
+                    reveal(r+dr,c+dc);
+                }
+            }
+        }
+        /* win check */
+        let safeLeft=0;
+        for(let rr=0;rr<GRID;rr++){
+            for(let cc=0;cc<GRID;cc++){
+                if(board[rr][cc]!==9 && !revealed[rr][cc]) safeLeft++;
+            }
+        }
+        if(safeLeft===0){
+            gameOver=true;
+            gameOverMsg.textContent='YOU WIN!';
+            finalScoreEl.textContent='FINAL SCORE: '+score;
+            gameOverDiv.style.display='block';
+            beep(800,.5,'sine');
+        }
+    }
+}
+
+/* ---------- CONTROLS ---------- */
+function getCell(e){
+    const rect=canvas.getBoundingClientRect();
+    const x=(e.clientX||e.touches[0].clientX)-rect.left;
+    const y=(e.clientY||e.touches[0].clientY)-rect.top;
+    const c=Math.floor(x/SIZE);
+    const r=Math.floor(y/SIZE);
+    return {r,c};
+}
+function leftClick(e){
+    if(gameOver) return;
+    const {r,c}=getCell(e);
+    reveal(r,c);
+    draw();
+}
+function rightClick(e){
+    e.preventDefault();
+    if(gameOver) return;
+    const {r,c}=getCell(e);
+    if(!revealed[r][c]){
+        flagged[r][c]=!flagged[r][c];
+        draw();
+    }
+}
+
+/* ---------- EVENT LISTENERS ---------- */
+canvas.addEventListener('click',leftClick);
+canvas.addEventListener('contextmenu',rightClick);
+if(isMobile){
+    canvas.addEventListener('touchend',e=>{
+        e.preventDefault();
+        const {r,c}=getCell(e.changedTouches[0]);
+        reveal(r,c);
+        draw();
+    });
+    canvas.addEventListener('touchstart',e=>e.preventDefault());
+}
+
+/* ---------- RESTART ---------- */
+function restartGame(){init();}
+
+/* ---------- RUN ---------- */
+init();
+</script>
+</body>
+</html>

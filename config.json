@@ -1,0 +1,12 @@
+{
+  "ssid": "",
+  "psk": "",
+  "hostname": "picowdesk",
+  "mode": "AP",
+  "AP_NAME": "PicoWDesk",
+  "AP_PASS": "picowdesk12345",
+  "PORT": 80,
+  "RESTRICTED": ["main.py", "config.json", "index.html"],
+  "CHUNK": 4096,
+  "MAX_SINGLE_SEND": 512
+}

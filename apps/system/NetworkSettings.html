@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"><title>Network Settings</title>
+<meta name="window-defaults" content='{"top":50,"left":150,"width":400,"height":550}'>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<style>
+body{margin:0;font-family:-apple-system;padding:20px;background:#f7f7f7}
+button,input{margin:5px 0;padding:6px 12px}
+table{border-collapse:collapse;width:100%}
+td,th{padding:6px;border-bottom:1px solid #ddd;text-align:left}
+</style>
+</head>
+<body>
+<h2>Network Settings</h2>
+<div id="info"></div>
+<hr>
+<h3>Available Networks</h3>
+<table id="nets"><thead><tr><th>SSID</th><th>RSSI</th><th></th></tr></thead><tbody></tbody></table>
+<hr>
+<input id="ssid" placeholder="SSID">
+<input id="psk" type="password" placeholder="Password">
+<button onclick="connect()">Connect to Wi-Fi</button>
+<hr>
+<!-- Dynamic button -->
+<button id="modeBtn" onclick="toggleMode()"></button>
+
+<script>
+let currentMode = "";   // updated on load
+
+async function load(){
+  const d = await fetch("/api/info").then(r => r.json());
+  currentMode = d.mode;                       // real value from Pico
+  console.log("Server mode =", currentMode);  // debugging
+
+  document.getElementById("info").innerHTML =
+    `Current mode: ${d.mode}<br>` +
+    `AP IP: ${d.ip_ap || "—"}<br>` +
+    `STA IP: ${d.ip_sta || "—"}`;
+
+  const nets = await fetch("/api/scan").then(r => r.json());
+  // … rest of scan rendering …
+
+  // **now** set the button text
+  const btn = document.getElementById("modeBtn");
+  btn.textContent = (currentMode.toUpperCase === "AP")
+                    ? "Switch to STA Mode!"
+                    : "Switch to AP-only Mode!";
+}
+
+function select(ssid){ document.getElementById("ssid").value = ssid; }
+
+async function connect(){
+  const ssid = document.getElementById("ssid").value;
+  const psk  = document.getElementById("psk").value;
+  if(!ssid){ alert("Enter SSID"); return; }
+  await fetch("/api/connect",{method:"POST", body:JSON.stringify({ssid, psk})});
+  alert("Connecting… Pico will restart shortly.");
+}
+
+async function toggleMode() {
+  if (currentMode.toUpperCase === "AP") {
+    await fetch("/api/mode/sta", {method: "POST"});
+    alert("Switching to STA mode… Pico will restart shortly.");
+  } else {
+    await fetch("/api/mode/ap", {method: "POST"});
+    alert("Switching to AP-only mode… Pico will restart shortly.");
+  }
+}
+
+load();
+</script>
+</body>
+</html>
