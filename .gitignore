@@ -20,6 +20,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+*.code-workspace
 
 # MicroPython device mount points (common on macOS/Linux)
 /mnt/
