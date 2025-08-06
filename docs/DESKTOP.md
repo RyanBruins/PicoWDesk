@@ -1,5 +1,3 @@
----
-
 ## 📄 **DESKTOP.md**  
 *Desktop & Mobile Modes, File System Layout, Icons, Restricted Files & System Apps*
 
